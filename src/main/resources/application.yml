@@ -1,0 +1,15 @@
+spring:
+  main:
+    web-application-type: none
+
+gis:
+  backend:
+    base-url: ${GIS_BACKEND_BASE_URL:}
+    worker-token: ${GIS_WORKER_TOKEN:}
+    connect-timeout-ms: 5000
+    read-timeout-ms: 10000
+  worker:
+    id: ${GIS_WORKER_ID:}
+    poll-interval-ms: 5000
+    heartbeat-interval-seconds: 30
+    sleep-step-seconds: 5

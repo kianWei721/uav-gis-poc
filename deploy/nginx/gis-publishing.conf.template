@@ -1,0 +1,68 @@
+# 本文件在发布服务器上经 envsubst 渲染后放入 Nginx http 配置域。
+# 正式接管 18082 前必须备份旧配置并停止 Python SimpleHTTP。
+
+proxy_cache_path /var/cache/nginx/gis-raster
+                 levels=1:2
+                 keys_zone=gis_raster_cache:64m
+                 max_size=20g
+                 inactive=7d
+                 use_temp_path=off;
+
+map $gis_layer_id $gis_cog_url {
+    default "";
+    ${ORTHO_LAYER_ID} "s3://gis-published/${PROJECT_ID}/${ORTHO_DATASET_ID}/${ORTHO_ARTIFACT_ID}/ortho/result.cog.tif";
+}
+
+map $gis_layer_id $gis_3d_prefix {
+    default "";
+    ${TILES_LAYER_ID} "${PROJECT_ID}/${TILES_DATASET_ID}/${TILES_ARTIFACT_ID}/3dtiles";
+}
+
+server {
+    listen 18082;
+    server_name _;
+
+    location = /healthz {
+        access_log off;
+        default_type application/json;
+        return 200 '{"status":"UP"}';
+    }
+
+    location ~ ^/gis/raster/(?<gis_layer_id>[0-9]+)/(?<gis_z>[0-9]+)/(?<gis_x>[0-9]+)/(?<gis_y>[0-9]+)\.png$ {
+        if ($gis_cog_url = "") { return 404; }
+
+        proxy_pass http://127.0.0.1:18081/cog/tiles/WebMercatorQuad/$gis_z/$gis_x/$gis_y.png?url=$gis_cog_url&resampling=bilinear&reproject=bilinear;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 120s;
+
+        proxy_cache gis_raster_cache;
+        proxy_cache_key "$gis_cog_url|$gis_z|$gis_x|$gis_y|png|bilinear";
+        proxy_cache_lock on;
+        proxy_cache_valid 200 7d;
+        proxy_cache_valid 404 1m;
+        add_header X-GIS-Cache $upstream_cache_status always;
+        add_header Cache-Control "public, max-age=604800" always;
+    }
+
+    location ~ ^/gis/3d/(?<gis_layer_id>[0-9]+)/(?<gis_asset_path>.+)$ {
+        if ($gis_3d_prefix = "") { return 404; }
+
+        proxy_pass http://${MINIO_S3_ENDPOINT}/gis-published/$gis_3d_prefix/$gis_asset_path;
+        proxy_http_version 1.1;
+        proxy_set_header Host ${MINIO_S3_ENDPOINT};
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_force_ranges on;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 120s;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    # 仅保留现有 /gis-demo/ POC 的兼容入口，正式 Layer 不使用该目录。
+    location / {
+        root /srv/gis-poc;
+        try_files $uri =404;
+    }
+}
